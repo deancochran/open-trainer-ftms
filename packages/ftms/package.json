@@ -75,6 +75,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@deancochran/ftms": "0.2.0",
     "@types/web-bluetooth": "^0.0.21"
   }
 }

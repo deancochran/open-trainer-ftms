@@ -1,3 +1,4 @@
+import { encodeFtmsControlRequest } from "@deancochran/ftms";
 import { FtmsRangeError } from "./errors.js";
 import type { ResistanceControlFormat, SimulationParameters, SpinDownControl } from "./types.js";
 
@@ -19,34 +20,34 @@ function assertIntegerRange(value: number, minimum: number, maximum: number, lab
   }
 }
 
+// Quantization and FtmsRangeError remain Open Trainer policy. The shared codec
+// requires resolution-aligned inputs, so pass it the already-validated values
+// in its human units rather than changing how callers' targets are rounded.
+
 export function requestControlCommand(): Uint8Array {
-  return Uint8Array.of(CONTROL_OPCODE.requestControl);
+  return encodeFtmsControlRequest({ op: "requestControl" });
 }
 
 export function resetCommand(): Uint8Array {
-  return Uint8Array.of(CONTROL_OPCODE.reset);
+  return encodeFtmsControlRequest({ op: "reset" });
 }
 
 export function startCommand(): Uint8Array {
-  return Uint8Array.of(CONTROL_OPCODE.startResume);
+  return encodeFtmsControlRequest({ op: "startResume" });
 }
 
 export function stopCommand(): Uint8Array {
-  return Uint8Array.of(CONTROL_OPCODE.stopPause, 0x01);
+  return encodeFtmsControlRequest({ op: "stopPause", action: "stop" });
 }
 
 export function pauseCommand(): Uint8Array {
-  return Uint8Array.of(CONTROL_OPCODE.stopPause, 0x02);
+  return encodeFtmsControlRequest({ op: "stopPause", action: "pause" });
 }
 
 export function targetPowerCommand(watts: number): Uint8Array {
   const rounded = Math.round(watts);
   assertIntegerRange(rounded, -32768, 32767, "Target power");
-  const bytes = new Uint8Array(3);
-  const view = new DataView(bytes.buffer);
-  view.setUint8(0, CONTROL_OPCODE.setTargetPower);
-  view.setInt16(1, rounded, true);
-  return bytes;
+  return encodeFtmsControlRequest({ op: "setTargetPower", powerWatts: rounded });
 }
 
 export function targetResistanceCommand(
@@ -55,15 +56,13 @@ export function targetResistanceCommand(
 ): Uint8Array {
   const encoded = Math.round(level * 10);
   if (format === "uint8") {
+    // Published @deancochran/ftms 0.2.0 only encodes signed16 resistance.
+    // Keep this explicit compatibility path; never infer it from device data.
     assertIntegerRange(encoded, 0, 255, "Encoded resistance level");
     return Uint8Array.of(CONTROL_OPCODE.setTargetResistance, encoded);
   }
   assertIntegerRange(encoded, -32768, 32767, "Encoded resistance level");
-  const bytes = new Uint8Array(3);
-  const view = new DataView(bytes.buffer);
-  view.setUint8(0, CONTROL_OPCODE.setTargetResistance);
-  view.setInt16(1, encoded, true);
-  return bytes;
+  return encodeFtmsControlRequest({ op: "setTargetResistance", resistanceLevel: encoded / 10 });
 }
 
 export function simulationCommand(parameters: SimulationParameters): Uint8Array {
@@ -77,27 +76,24 @@ export function simulationCommand(parameters: SimulationParameters): Uint8Array 
   assertIntegerRange(rollingResistance, 0, 255, "Encoded rolling resistance");
   assertIntegerRange(windResistance, 0, 255, "Encoded wind resistance");
 
-  const bytes = new Uint8Array(7);
-  const view = new DataView(bytes.buffer);
-  view.setUint8(0, CONTROL_OPCODE.setSimulation);
-  view.setInt16(1, windSpeed, true);
-  view.setInt16(3, grade, true);
-  view.setUint8(5, rollingResistance);
-  view.setUint8(6, windResistance);
-  return bytes;
+  return encodeFtmsControlRequest({
+    op: "setIndoorBikeSimulation",
+    windSpeedMps: windSpeed / 1000,
+    gradePercent: grade / 100,
+    crr: rollingResistance / 10_000,
+    cwKgPerM: windResistance / 100,
+  });
 }
 
 export function targetCadenceCommand(rpm: number): Uint8Array {
-  assertIntegerRange(rpm * 2, 0, 65535, "Target cadence in half-RPM units");
-  const bytes = new Uint8Array(3);
-  bytes[0] = CONTROL_OPCODE.setTargetCadence;
-  new DataView(bytes.buffer).setUint16(1, rpm * 2, true);
-  return bytes;
+  const encoded = rpm * 2;
+  assertIntegerRange(encoded, 0, 65535, "Target cadence in half-RPM units");
+  return encodeFtmsControlRequest({ op: "setTargetedCadence", cadenceRpm: encoded / 2 });
 }
 
 export function spinDownCommand(control: SpinDownControl): Uint8Array {
   if (!["start", "ignore"].includes(control)) {
     throw new FtmsRangeError("Spin-down control must be start or ignore.");
   }
-  return Uint8Array.of(CONTROL_OPCODE.spinDown, control === "start" ? 0x01 : 0x02);
+  return encodeFtmsControlRequest({ op: "spinDown", action: control });
 }
